@@ -1,0 +1,361 @@
+//Task description:
+
+//There are different google spreadsheets and .xlsx files located in different g-drive folders. Each .xlsx and spreadsheets have different number of sheets,
+//only one sheet has the same name and structure of table that all files have. The sheet which all files contain is called "Data_input". Each "Data_input" sheet has it's own data feeds
+//that is related to only one customer. The number of rows may range from 20 to 2000 (or even more) and 21 columns. The structure of each "Data_input"s are the same, with different data feeds.
+//The data contains information about Customers sites, Project number, City and Country, Issues and Risks, Planned delivery dates, Actual delivery dates, Contractual dates and etc.
+//Data feeds are assumed to be updated every day
+
+//Since the data feeds in each file will be updated every day, the aim is to AUTOMATE gathering and merging all data in one separate google spreadsheet and then export this spreadsheet to Excel file.
+//The code below consists of two parts, Apps script and VBA.
+//The first part of code will work only with the files of google drive and the second part will do the rest job in Excel's macro enabled file.
+
+
+//Solution:
+//We will start with creating a new destination file (google spreadsheet) in new google drive folder. Creating folder and file can be simply done manually. 
+//We call this new spreadsheet "Data_Imported". Inside "Data_Imported" we create two sheets, which will be called as "Trackers" and "ALL". 
+//"Trackers" sheet we will use to list all the links of the files from which we will extract data feeds from their "Data_input" sheets as was mentioned above.
+//All the links will be listed manually in vertical order starting from "A2" cell.
+//Second sheet of "Data_imported" file, which is called "ALL", we will use for merging all data that we will extract by opening the links from the "Trackers" 
+//Before gathering all data feeds in "ALL" tab, we copy each file from the link to created new folder, where the file "Data_imported" is also located.
+//Apps script does not work with .xlsx extention files, therefore, since besides google spreadsheets we have also .xlsx files, we will need to transform .xlsx files to google spreadsheets format and only then we will locate the copies of the files to the folder.
+
+
+//PLAN:
+//1. Delete files in our created folder and keep only "Data_imported" file. 
+//   Clear whole "ALL" sheet of "Data_imported"
+//2. Looping through the links in "Trackers", check either the link directly referencing to the file or to the folder where file is located.
+//   If the link is the file's link and the file is google spreadsheet then we just copy the file to our folder.
+//   If the link is the file's link and the file is .xlsx extension file then we first convert copy of .xlsx file to google spreadsheet format and then locate it to our folder 
+//   If the link is not the file's but folder's link, then we copy last updated file* from that folder and locate it to our folder. (*Last updated file in the folder is assumed to be the proper file we need)
+//3. Looping through all copied and transformed files in our folder and copying data from each "Data_input" sheet to new sheet in "Data_imported"
+//   Merging all extracted data together in vertical order in sheet "ALL".
+//4. Deleting all files in our folder except "Data_imported" file and deleting all sheets except "Trackers" (where the links are) and "ALL" (where the aggregated data was stored).
+//5. Looping through "ALL" sheets, checking if there are gaps between the rows. If so, then we delete entire rows.
+
+
+
+function delete_files_in_folder(){
+//delete files in folder
+      var this_folder = DriveApp.getFolderById('1eMjzBhXzS6SUknGiUQ8zpEV_DyjEK').getFiles();
+      while(this_folder.hasNext()){
+         var this_file=this_folder.next();
+         if (this_file.getName()!='Data_Imported'){
+         this_file.setTrashed(true) ;}
+      }
+//clear 'Data_imported'
+         SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Trackers').getRange(1,2,100,2).clearContent();
+          var sheets=SpreadsheetApp.getActiveSpreadsheet().getSheets();
+          for (var i=0;i<sheets.length;i++){
+              if (sheets[i].getName()!="Trackers" && sheets[i].getName()!="ALL"){
+                SpreadsheetApp.getActiveSpreadsheet().deleteSheet(sheets[i]);}
+          }
+           Logger.log("Done1");
+      }
+ 
+
+
+function copy_latest_files_fromPMdrive_and_convert(){
+
+//get the sheet "Trackers" from "Data_imported" where all links of the files are listed
+var folderId='1eMjzBhXzS6SUknGiUQ8zpEV_DyjEK'
+var app=SpreadsheetApp;
+var activesheet=app.getActiveSpreadsheet().getSheetByName("Trackers");
+var last_row=activesheet.getLastRow();
+var cell_value="abc"
+ 
+
+ //loop through links in "Tracker" sheet and check if it has a string format
+for (var i=1;i<=last_row;i++){
+  cell_value=activesheet.getRange(i,1).getValue();
+  try {
+    var four_chars=cell_value.substring(8,12);}
+  catch(err) {
+    var four_chars="ThereIsNoIDinCell";}
+
+ //since the links are different, there are links to share drive folders and direct links to the trackers(files)
+ // if the selected link is for share drive, than code copies the latest file in drive (assumed to be a PM tracker)
+ // if the selected link is for file itself, than code copies the file 
+ // in both above cases, if copied file has format '.xls' or '.xlsx', then the files will be converted to g. sheets format
+ // all copied and transformed files will be stored in share drive called "All gathered", 
+  
+  if (four_chars=="driv"){
+      var id_from_url = cell_value.match(/[-\w]{25,}/);   
+      var files = DriveApp.getFolderById(id_from_url).getFiles();
+      var obj_list=[];
+      while (files.hasNext()){
+        var file_in_folder=files.next();
+        obj_list.push({name: file_in_folder.getName(), date: file_in_folder.getLastUpdated()});}//getDateCreated()
+                                                                            
+        obj_list.sort(function(a, b) {return new Date(b.date) - new Date(a.date)});
+        var file = DriveApp.getFolderById(id_from_url).getFilesByName(obj_list[0].name).next();
+
+        var last_digits= file.getName().slice(-4);
+
+        if (last_digits!='xlsx' && last_digits!='.xls'){
+          file.makeCopy(obj_list[0].name,DriveApp.getFolderById('1eMjzBhXzS6SUknGiUQ8zpEV_DyjEK'));
+          //activesheet.getRange(i,2).setValue(file.getId());
+          //Logger.log(obj_list[0].name);
+        }
+        else{
+        var xBlob = file.getBlob();
+        var resource  = {
+        title : "Copy of "+ file.getName(),
+        key: file.getId()
+        }; 
+
+        var file_converted=Drive.Files.insert(resource , xBlob,{convert: true});
+        var file_ID=file_converted.id
+
+        var retrieved=DriveApp.getFileById(file_ID);
+        DriveApp.getFolderById(folderId).addFile(retrieved)
+        
+        //Logger.log(obj_list[0].name);
+        }
+      }
+  else if (four_chars=="docs"){
+      var id_from_url = cell_value.match(/[-\w]{25,}/);
+      var file=DriveApp.getFileById(id_from_url);
+
+      var last_digits= file.getName().slice(-4);
+      
+      if (last_digits!='xlsx' && last_digits!='.xls'){
+        file.makeCopy(file.getName(),DriveApp.getFolderById('1eMjzBhXzS6SUknGiUQ8zpEV_DyjEK'));}
+        //activesheet.getRange(i,2).setValue(id_from_url);
+        //Logger.log(file.getName());}
+
+      else{
+        var xBlob = file.getBlob();
+        var resource  = {
+        title : "Copy of " + file.getName(),
+        key: file.getId()
+        }; 
+
+        var file_converted=Drive.Files.insert(resource , xBlob,{convert: true});
+        var file_ID=file_converted.id
+
+        var retrieved=DriveApp.getFileById(file_ID);
+        DriveApp.getFolderById(folderId).addFile(retrieved);
+        //Logger.log(file.getName());
+
+         
+      } 
+    }
+}
+
+var copied_files=DriveApp.getFolderById('1eMjzBhXzS6SUknGiUQ8zpEV_DyjEK').getFiles();
+i=1
+while (copied_files.hasNext()){
+  var cp_file=copied_files.next();
+  if (cp_file.getName()!='Data_Imported'){
+    activesheet.getRange(i,2).setValue(cp_file.getId())
+    activesheet.getRange(i,3).setValue(cp_file.getName())
+    i++;}
+}
+Logger.log("Done2");
+}
+
+
+
+function copy_MPWdataInput_to_each_sheet(){
+
+// In this part I go through the number of copied files and create one sheet in "Data imported" for each copied file
+//loop through each copied file (trackers), copy values from 'Data Input' and paste to "Data imported' to sheet //created from code above
+
+   var f=SpreadsheetApp.openById('1xLuoiBYFMGyFpqTu-2Q4SEPXyMSiuiNUlxpSLu72');
+   var last_row=f.getSheetByName("Trackers").getLastRow();
+
+  for (var i=1;i<=last_row;i++){
+    var sht=f.insertSheet();
+    sht.setName('MPW'+i); 
+
+    //Logger.log(f.getSheetByName("Trackers").getRange('B'+i).getValue())
+
+    var open_file=SpreadsheetApp.openById(f.getSheetByName("Trackers").getRange('B'+i).getValue());
+    try{
+      var mpw_range=open_file.getSheetByName('Data Input').getDataRange();}
+    catch(err){
+      var mpw_range=open_file.getSheetByName('Data Input ').getDataRange();}
+    var A1Range=mpw_range.getA1Notation();
+    var SData = mpw_range.getValues();
+
+    f.getSheetByName('MPW'+i).getRange(A1Range).setValues(SData);}
+    
+  Logger.log("Done3");
+  }
+
+
+function gather_allMPW_in_ALL() {
+ 
+//gather/append all values pulled from previously populated sheets in one sheet, called "ALL"
+  
+  var sheets=SpreadsheetApp.getActiveSpreadsheet().getSheets();
+  var sheet_ALL=SpreadsheetApp.getActiveSpreadsheet().getSheetByName('ALL');
+
+  var last_row_old=sheet_ALL.getDataRange().getLastRow();
+  if (last_row_old>1){
+  sheet_ALL.getRange(2,1,last_row_old,21).clearContent();}
+ 
+  var r=2;
+  for (var i=0;i<sheets.length;i++){
+    //Logger.log(i)
+    if (sheets[i].getName()!="Trackers" && sheets[i].getName()!="ALL"){
+      
+      var last_row=sheets[i].getDataRange().getLastRow();
+      if (last_row>1){
+      var sheet_values=sheets[i].getRange(3,1,last_row-2,21).getValues();
+
+      
+      sheet_ALL.getRange(r,1,last_row-2,21).setValues(sheet_values);
+      r=sheet_ALL.getDataRange().getLastRow()+1;}
+      //Logger.log(sheets[i].getName())
+    }
+  }
+  //sheet_ALL.setRowHeights(1,sheet_ALL.getDataRange().getLastRow(),20)
+  
+  var i=sheets.length;
+  while(sheets.length!=2 && i>=0){ 
+    i=i-1; 
+    
+  //for (var i=0;i<sheets.length;i++){
+    //Logger.log(i)
+    while(i>=0 && sheets[i].getName()!="Trackers" && sheets[i].getName()!="ALL"){
+      SpreadsheetApp.getActiveSpreadsheet().deleteSheet(sheets[i]);
+      i=i-1;}
+    }
+
+  Logger.log("Done4");
+}
+
+
+function del_blank_rows(){
+  var rng_row=SpreadsheetApp.getActiveSpreadsheet().getSheetByName('ALL').getDataRange().getLastRow();
+  for(var i=1;i<rng_row;i++){
+    if (SpreadsheetApp.getActiveSpreadsheet().getSheetByName('ALL').getRange('A'+i).getValue()==""){
+      SpreadsheetApp.getActiveSpreadsheet().getSheetByName('ALL').deleteRow(i);
+    } 
+  }
+  Logger.log("Done");
+}
+
+
+  
+function execution_all(){
+  //execution of all codes created above
+  delete_files_in_folder();
+  copy_latest_files_fromPMdrive_and_convert();
+  SpreadsheetApp.flush();  
+  copy_MPWdataInput_to_each_sheet();
+  SpreadsheetApp.flush();
+  gather_allMPW_in_ALL();
+}
+
+
+
+
+
+
+
+
+//--------------------VBA-----------------------------//
+'Load "Data_imported" to Excel file
+
+'PLAN:
+'1. we download the file "Data_imported" from G Drive
+'2. We copy "ALL" sheet to "All_Sites" of Excel file and allocating columns in appropriate order
+
+Option Explicit
+
+Sub download_PM_inputs()
+
+Dim PM_input As Workbook
+Dim last_row As Long
+Dim Latest_File As String
+Dim x As String
+
+
+'Download file
+On Error Resume Next
+Call Shell("C:\Program Files\Google\Chrome\Application\chrome.exe https://docs.google.com/spreadsheets/d/1xLuoiBYFMGyFpqTu-2Q4SEPXyMSiuiNUlxpSLu72/export?format=xlsx", vbHide)
+
+If Err.Number <> 0 Then
+    Call Shell(" C:\Program Files (x86)\Google\Chrome\Application\chrome.exe https://docs.google.com/spreadsheets/d/1xLuoiBYFMGyFpqTu-2Q4SEPXyMSiuiNUlxpSLu72/export?format=xlsx", vbHide)
+End If
+On Error GoTo 0
+
+Application.Wait (Now + TimeValue("0:00:07"))
+
+
+'Clear old data records in 'All_Sites' sheet
+
+last_row = ThisWorkbook.Sheets("All_Sites").Range("A2").End(xlDown).row
+
+ThisWorkbook.Sheets("All_Sites").Range("A2:R" & last_row).ClearContents
+ThisWorkbook.Sheets("All_Sites").Range("T2:U" & last_row).ClearContents
+ThisWorkbook.Sheets("All_Sites").Range("W2:X" & last_row).ClearContents
+
+
+'Choose the latest file, if file with the sam name is already exists in 'Downloads' folder
+
+Latest_File = Dir(Environ("USERPROFILE") & "\Downloads\*.xls*")
+
+x = Dir
+Do While x <> ""
+    If FileDateTime(Environ("USERPROFILE") & "\Downloads\" & Latest_File) < FileDateTime(Environ("USERPROFILE") & "\Downloads\" & x) Then
+        Latest_File = x
+    End If
+    
+    x = Dir
+Loop
+
+Set PM_input = Workbooks.Open(Environ("USERPROFILE") & "\Downloads\" & Latest_File, , True)
+
+
+'Copy from downloaded file and paste in 'All_Sites'
+last_row = PM_input.Sheets("ALL").Range("A2").End(xlDown).row
+
+PM_input.Sheets("ALL").Range("A2:R" & last_row).Copy ThisWorkbook.Sheets("All_Sites").Range("A2")
+PM_input.Sheets("ALL").Range("S2:T" & last_row).Copy ThisWorkbook.Sheets("All_Sites").Range("T2")
+PM_input.Sheets("ALL").Range("U2:U" & last_row).Copy ThisWorkbook.Sheets("All_Sites").Range("X2")
+
+
+'Drag formulas till the end of table
+
+last_row = ThisWorkbook.Sheets("All_Sites").Range("A2").End(xlDown).row
+
+ThisWorkbook.Sheets("All_Sites").Activate
+
+ThisWorkbook.Sheets("All_Sites").Range("V2").AutoFill Destination:=ThisWorkbook.Sheets("All_Sites").Range("V2:V" & last_row), Type:=xlFillDefault
+ThisWorkbook.Sheets("All_Sites").Range("Y2").AutoFill Destination:=ThisWorkbook.Sheets("All_Sites").Range("Y2:Y" & last_row), Type:=xlFillDefault
+ThisWorkbook.Sheets("All_Sites").Range("Z2").AutoFill Destination:=ThisWorkbook.Sheets("All_Sites").Range("Z2:Z" & last_row), Type:=xlFillDefault
+ThisWorkbook.Sheets("All_Sites").Range("AJ2").AutoFill Destination:=ThisWorkbook.Sheets("All_Sites").Range("AJ2:AJ" & last_row), Type:=xlFillDefault
+ThisWorkbook.Sheets("All_Sites").Range("AM2").AutoFill Destination:=ThisWorkbook.Sheets("All_Sites").Range("AM2:AM" & last_row), Type:=xlFillDefault
+ThisWorkbook.Sheets("All_Sites").Range("AN2").AutoFill Destination:=ThisWorkbook.Sheets("All_Sites").Range("AN2:AN" & last_row), Type:=xlFillDefault
+ThisWorkbook.Sheets("All_Sites").Range("AR2").AutoFill Destination:=ThisWorkbook.Sheets("All_Sites").Range("AR2:AR" & last_row), Type:=xlFillDefault
+
+
+PM_input.Close
+
+
+MsgBox "PM input data was updated"
+AppActivate Application.Caption
+
+Exit Sub
+
+
+End Sub
+
+
+
+//----------------function to transform .xlsx to g. spreadsheet
+
+function makeCopyGsheettoXLSX() {
+  
+  var destination = DriveApp.getFolderById("1LBfVuyyI_1p-1qxVaFEw5SQDalPJj");
+  var name = "Backup Copy"
+  var sheetId = "155wWfb3Jawv9TLFooii6s71JthGXaNeYQSjFpQpu";
+  var url = "https://docs.google.com/spreadsheets/d/" + sheetId + "/export?format=xlsx&access_token=" + ScriptApp.getOAuthToken();
+  var res = UrlFetchApp.fetch(url, {headers: {Authorization: "Bearer " + ScriptApp.getOAuthToken()}});
+  var blob = UrlFetchApp.fetch(url).getBlob().setName(name + ".xlsx"); // Modified
+  destination.createFile(blob);
+}
